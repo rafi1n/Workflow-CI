@@ -1,0 +1,123 @@
+name: CI - MLflow Project Retrain + Artifacts (+ Docker)
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install mlflow pandas numpy scikit-learn matplotlib
+
+      # Run MLflow Project
+      - name: Run MLflow Project (training)
+        env:
+          MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
+        run: |
+          cd MLProject
+          mlflow run . --env-manager=local
+
+      # Ambil run terakhir dan download artifacts
+      - name: Collect latest run artifacts
+        env:
+          MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
+        run: |
+          python - << 'PY'
+          import os, shutil
+          import mlflow
+          import pandas as pd
+
+          mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+          exp = mlflow.get_experiment_by_name("workflow_ci_titanic")
+          if exp is None:
+            raise SystemExit("Experiment 'workflow_ci_titanic' tidak ditemukan. Pastikan modelling.py set_experiment('workflow_ci_titanic').")
+
+          runs = mlflow.search_runs([exp.experiment_id], order_by=["start_time DESC"], max_results=1)
+          if runs.empty:
+            raise SystemExit("Tidak ada run yang ditemukan.")
+
+          run_id = runs.iloc[0]["run_id"]
+          print("LATEST_RUN_ID:", run_id)
+
+          out_dir = os.path.join("ci_outputs", run_id)
+          os.makedirs(out_dir, exist_ok=True)
+
+          # download folder extras (confusion_matrix.png, classification_report.txt, dsb)
+          extras_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="extras")
+          if os.path.isdir(extras_dir):
+            for f in os.listdir(extras_dir):
+              shutil.copy2(os.path.join(extras_dir, f), os.path.join(out_dir, f))
+
+          with open(os.path.join(out_dir, "run_id.txt"), "w", encoding="utf-8") as f:
+            f.write(run_id)
+          PY
+
+      - name: Upload artifacts to GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci_outputs
+          path: ci_outputs/
+
+      # Commit artefak balik ke repo
+      - name: Commit outputs back to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ci_outputs/ || true
+          git commit -m "CI: save latest training artifacts" || echo "No changes"
+          git push || echo "No push"
+
+  docker:
+    needs: retrain
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MLflow
+        run: |
+          python -m pip install --upgrade pip
+          pip install mlflow
+
+      - name: Login Docker Hub
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build Docker from latest MLflow model
+        env:
+          MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
+        run: |
+          # cari run_id terakhir dari folder ci_outputs
+          RUN_ID=$(ls -1 ci_outputs/*/run_id.txt 2>/dev/null | tail -n 1 | xargs cat)
+          echo "RUN_ID=$RUN_ID"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/workflow-ci-titanic:latest"
+          mlflow models build-docker -m "runs:/${RUN_ID}/model" -n "$IMAGE"
+
+      - name: Push Docker image
+        run: |
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/workflow-ci-titanic:latest"
+          docker push "$IMAGE"
