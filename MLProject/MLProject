@@ -4,5 +4,7 @@ conda_env: conda.yaml
 
 entry_points:
   main:
-    parameters: {}
-    command: "python modelling.py"
+    parameters:
+      data_path: {type: str, default: "titanic_preprocessing.csv"}
+      output_dir: {type: str, default: "artifacts"}
+    command: "python modelling.py --data_path {data_path} --output_dir {output_dir}"
