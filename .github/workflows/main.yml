@@ -1,4 +1,4 @@
-name: CI - MLflow Project Retrain + Artifacts + Docker
+name: CI - MLflow Project Retrain + Artifacts (+ Docker)
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install mlflow pandas numpy scikit-learn matplotlib joblib
+          pip install mlflow==2.19.0 pandas numpy scikit-learn matplotlib joblib
 
       - name: Run MLflow Project (training)
         env:
@@ -40,18 +40,16 @@ jobs:
           python - << 'PY'
           import os, shutil
           import mlflow
-          from mlflow.tracking import MlflowClient
+          import pandas as pd
 
-          tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
-          mlflow.set_tracking_uri(tracking_uri)
-
+          mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
           exp = mlflow.get_experiment_by_name("workflow_ci_titanic")
           if exp is None:
-              raise SystemExit("Experiment 'workflow_ci_titanic' tidak ditemukan. Pastikan modelling.py memanggil mlflow.set_experiment('workflow_ci_titanic').")
+              raise SystemExit("Experiment 'workflow_ci_titanic' tidak ditemukan. Pastikan modelling.py set_experiment sama.")
 
           runs = mlflow.search_runs([exp.experiment_id], order_by=["start_time DESC"], max_results=1)
           if runs.empty:
-              raise SystemExit("Tidak ada run yang ditemukan di experiment tersebut.")
+              raise SystemExit("Tidak ada run yang ditemukan.")
 
           run_id = runs.iloc[0]["run_id"]
           print("LATEST_RUN_ID:", run_id)
@@ -60,15 +58,13 @@ jobs:
           os.makedirs(out_dir, exist_ok=True)
 
           # download extras artifacts
-          try:
-              extras_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="extras")
-              if os.path.isdir(extras_dir):
-                  for f in os.listdir(extras_dir):
-                      shutil.copy2(os.path.join(extras_dir, f), os.path.join(out_dir, f))
-          except Exception as e:
-              print("No extras artifacts found or error downloading extras:", e)
+          extras_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="extras")
+          if os.path.isdir(extras_dir):
+              for f in os.listdir(extras_dir):
+                  src = os.path.join(extras_dir, f)
+                  if os.path.isfile(src):
+                      shutil.copy2(src, os.path.join(out_dir, f))
 
-          # run id utk job docker
           with open(os.path.join(out_dir, "run_id.txt"), "w", encoding="utf-8") as f:
               f.write(run_id)
           PY
@@ -103,7 +99,7 @@ jobs:
       - name: Install MLflow
         run: |
           python -m pip install --upgrade pip
-          pip install mlflow
+          pip install mlflow==2.19.0
 
       - name: Login Docker Hub
         run: |
@@ -113,14 +109,8 @@ jobs:
         env:
           MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
         run: |
-          # cari run_id terbaru dari ci_outputs
           RUN_ID=$(ls -1 ci_outputs/*/run_id.txt 2>/dev/null | tail -n 1 | xargs cat)
           echo "RUN_ID=$RUN_ID"
-          if [ -z "$RUN_ID" ]; then
-            echo "RUN_ID kosong. Pastikan job retrain membuat ci_outputs/<run_id>/run_id.txt dan ter-commit."
-            exit 1
-          fi
-
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/workflow-ci-titanic:latest"
           mlflow models build-docker -m "runs:/${RUN_ID}/model" -n "$IMAGE"
 
