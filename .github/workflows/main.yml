@@ -10,31 +10,26 @@ permissions:
 
 jobs:
   retrain:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install mlflow==2.19.0 pandas numpy scikit-learn matplotlib joblib
-
       - name: Run MLflow Project (training)
         env:
           MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
         run: |
           cd MLProject
-          mlflow run . --env-manager=local --experiment-name workflow_ci_titanic
+          mlflow run . --env-manager=local
 
-      - name: Collect latest run artifacts
         env:
           MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
         run: |
@@ -43,87 +38,87 @@ jobs:
           import mlflow
 
           mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-
-          exp = mlflow.get_experiment_by_name("workflow_ci_titanic")
+          EXP_NAME = "workflow_ci_titanic"
+          exp = mlflow.get_experiment_by_name(EXP_NAME)
           if exp is None:
-              raise SystemExit("Experiment 'workflow_ci_titanic' tidak ditemukan. Pastikan --experiment-name di mlflow run sudah benar.")
-
+              raise SystemExit(
+                  f"Experiment '{EXP_NAME}' tidak ditemukan. "
+                  f"Pastikan modelling.py memakai args.experiment_name='{EXP_NAME}' (default) atau MLProject file sesuai.")
           runs = mlflow.search_runs([exp.experiment_id], order_by=["start_time DESC"], max_results=1)
           if runs.empty:
-              raise SystemExit("Tidak ada run yang ditemukan di experiment workflow_ci_titanic.")
-
+              raise SystemExit("Tidak ada run yang ditemukan pada experiment tersebut.")
           run_id = runs.iloc[0]["run_id"]
           print("LATEST_RUN_ID:", run_id)
 
           out_dir = os.path.join("ci_outputs", run_id)
           os.makedirs(out_dir, exist_ok=True)
 
-          # download extras artifacts
+          # 1) download extras artifacts
           try:
               extras_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="extras")
               if os.path.isdir(extras_dir):
+                  dst = os.path.join(out_dir, "extras")
+                  os.makedirs(dst, exist_ok=True)
                   for f in os.listdir(extras_dir):
                       src = os.path.join(extras_dir, f)
                       if os.path.isfile(src):
-                          shutil.copy2(src, os.path.join(out_dir, f))
+                          shutil.copy2(src, os.path.join(dst, f))
           except Exception as e:
               print("WARNING: gagal download artifact_path='extras':", e)
-
+          # 2) download model artifacts
+          try:
+              model_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="model")
+              if not os.path.isdir(model_dir):
+                  raise SystemExit("Artifact path 'model' tidak ditemukan sebagai folder. Pastikan modelling.py log model ke artifact_path/name 'model'.")
+              dst = os.path.join(out_dir, "model")
+              if os.path.exists(dst):
+                  shutil.rmtree(dst)
+              shutil.copytree(model_dir, dst)
+          except Exception as e:
+              raise SystemExit(f"Gagal download artifact_path='model'. Error: {e}")
+          # save run_id
           with open(os.path.join(out_dir, "run_id.txt"), "w", encoding="utf-8") as f:
               f.write(run_id)
+          print("Saved artifacts to:", out_dir)
           PY
-
-      - name: Upload ci_outputs as workflow artifact
+      - name: Upload artifacts to GitHub Actions
         uses: actions/upload-artifact@v4
         with:
           name: ci_outputs
           path: ci_outputs/
-
-      - name: Commit outputs back to repo (optional)
+      - name: Commit outputs back to repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ci_outputs/ || true
-          git commit -m "CI: save latest training artifacts [skip ci]" || echo "No changes"
+          git commit -m "CI: save latest training artifacts" || echo "No changes"
           git push || echo "No push"
 
   docker:
-    if: github.actor != 'github-actions[bot]'
     needs: retrain
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
-
-      - name: Download ci_outputs artifact from retrain job
-        uses: actions/download-artifact@v4
-        with:
-          name: ci_outputs
-          path: ci_outputs
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install MLflow
         run: |
           python -m pip install --upgrade pip
           pip install mlflow==2.19.0
-
       - name: Login Docker Hub
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build Docker from latest MLflow model
-        env:
-          MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
+      - name: Build Docker from downloaded MLflow model artifact
         run: |
           RUN_ID=$(ls -1 ci_outputs/*/run_id.txt 2>/dev/null | tail -n 1 | xargs cat)
           echo "RUN_ID=$RUN_ID"
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/workflow-ci-titanic:latest"
-          mlflow models build-docker -m "runs:/${RUN_ID}/model" -n "$IMAGE"
+
+          mlflow models build-docker -m "ci_outputs/${RUN_ID}/model" -n "$IMAGE"
 
       - name: Push Docker image
         run: |
