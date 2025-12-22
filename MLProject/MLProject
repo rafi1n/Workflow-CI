@@ -1,4 +1,4 @@
-name: workflow-ci-titanic
+name: workflow_ci_titanic
 
 conda_env: conda.yaml
 
