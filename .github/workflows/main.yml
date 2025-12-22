@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   retrain:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
 
     steps:
@@ -31,7 +32,7 @@ jobs:
           MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
         run: |
           cd MLProject
-          mlflow run . --env-manager=local
+          mlflow run . --env-manager=local --experiment-name workflow_ci_titanic
 
       - name: Collect latest run artifacts
         env:
@@ -40,16 +41,16 @@ jobs:
           python - << 'PY'
           import os, shutil
           import mlflow
-          import pandas as pd
 
           mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+
           exp = mlflow.get_experiment_by_name("workflow_ci_titanic")
           if exp is None:
-              raise SystemExit("Experiment 'workflow_ci_titanic' tidak ditemukan. Pastikan modelling.py set_experiment sama.")
+              raise SystemExit("Experiment 'workflow_ci_titanic' tidak ditemukan. Pastikan --experiment-name di mlflow run sudah benar.")
 
           runs = mlflow.search_runs([exp.experiment_id], order_by=["start_time DESC"], max_results=1)
           if runs.empty:
-              raise SystemExit("Tidak ada run yang ditemukan.")
+              raise SystemExit("Tidak ada run yang ditemukan di experiment workflow_ci_titanic.")
 
           run_id = runs.iloc[0]["run_id"]
           print("LATEST_RUN_ID:", run_id)
@@ -58,38 +59,48 @@ jobs:
           os.makedirs(out_dir, exist_ok=True)
 
           # download extras artifacts
-          extras_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="extras")
-          if os.path.isdir(extras_dir):
-              for f in os.listdir(extras_dir):
-                  src = os.path.join(extras_dir, f)
-                  if os.path.isfile(src):
-                      shutil.copy2(src, os.path.join(out_dir, f))
+          try:
+              extras_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="extras")
+              if os.path.isdir(extras_dir):
+                  for f in os.listdir(extras_dir):
+                      src = os.path.join(extras_dir, f)
+                      if os.path.isfile(src):
+                          shutil.copy2(src, os.path.join(out_dir, f))
+          except Exception as e:
+              print("WARNING: gagal download artifact_path='extras':", e)
 
           with open(os.path.join(out_dir, "run_id.txt"), "w", encoding="utf-8") as f:
               f.write(run_id)
           PY
 
-      - name: Upload artifacts to GitHub Actions
+      - name: Upload ci_outputs as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: ci_outputs
           path: ci_outputs/
 
-      - name: Commit outputs back to repo
+      - name: Commit outputs back to repo (optional)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ci_outputs/ || true
-          git commit -m "CI: save latest training artifacts" || echo "No changes"
+          git commit -m "CI: save latest training artifacts [skip ci]" || echo "No changes"
           git push || echo "No push"
 
   docker:
+    if: github.actor != 'github-actions[bot]'
     needs: retrain
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+
+      - name: Download ci_outputs artifact from retrain job
+        uses: actions/download-artifact@v4
+        with:
+          name: ci_outputs
+          path: ci_outputs
 
       - name: Set up Python
         uses: actions/setup-python@v5
