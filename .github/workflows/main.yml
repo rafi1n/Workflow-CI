@@ -45,13 +45,12 @@ jobs:
 
           exps = mlflow.search_experiments()
           if not exps:
-              raise SystemExit("Tidak ada experiment di tracking store. Run training mungkin gagal membuat run.")
+              raise SystemExit("Tidak ada experiment di tracking store.")
 
           exp_ids = [e.experiment_id for e in exps]
-
           runs = mlflow.search_runs(exp_ids, order_by=["start_time DESC"], max_results=1)
           if runs.empty:
-              raise SystemExit("Tidak ada run yang ditemukan di semua experiments.")
+              raise SystemExit("Tidak ada run yang ditemukan.")
 
           run_id = runs.iloc[0]["run_id"]
           print("LATEST_RUN_ID:", run_id)
@@ -69,11 +68,11 @@ jobs:
                       if os.path.isfile(src):
                           shutil.copy2(src, os.path.join(dst, f))
           except Exception as e:
-              print("WARNING: gagal download artifact_path='extras':", e)
+              print("WARNING: gagal download extras:", e)
 
           model_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="model")
           if not os.path.isdir(model_dir):
-              raise SystemExit("Artifact path 'model' tidak ditemukan sebagai folder. Pastikan modelling.py log model ke 'model'.")
+              raise SystemExit("Artifact path 'model' tidak ditemukan. Pastikan modelling.py log model ke 'model'.")
 
           dst_model = os.path.join(out_dir, "model")
           if os.path.exists(dst_model):
@@ -83,7 +82,8 @@ jobs:
           with open(os.path.join(out_dir, "run_id.txt"), "w", encoding="utf-8") as f:
               f.write(run_id)
 
-          print("Saved artifacts to:", out_dir)
+          print("Saved to:", out_dir)
+          print("Model files:", os.listdir(dst_model))
           PY
 
       - name: Upload artifacts to GitHub Actions
@@ -108,6 +108,12 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Download ci_outputs from retrain job
+        uses: actions/download-artifact@v4
+        with:
+          name: ci_outputs
+          path: ci_outputs
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -126,6 +132,9 @@ jobs:
         run: |
           RUN_ID=$(ls -1 ci_outputs/*/run_id.txt 2>/dev/null | tail -n 1 | xargs cat)
           echo "RUN_ID=$RUN_ID"
+          ls -la "ci_outputs/${RUN_ID}" || true
+          ls -la "ci_outputs/${RUN_ID}/model" || true
+          test -f "ci_outputs/${RUN_ID}/model/MLmodel"
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/workflow-ci-titanic:latest"
           mlflow models build-docker -m "ci_outputs/${RUN_ID}/model" -n "$IMAGE"
 
