@@ -1,4 +1,4 @@
-name: workflow_ci_titanic
+name: workflow-ci-titanic
 
 conda_env: conda.yaml
 
@@ -7,4 +7,6 @@ entry_points:
     parameters:
       data_path: {type: str, default: "titanic_preprocessing.csv"}
       output_dir: {type: str, default: "artifacts"}
-    command: "python modelling.py --data_path {data_path} --output_dir {output_dir}"
+      experiment_name: {type: str, default: "workflow_ci_titanic"}
+      run_name: {type: str, default: "ci_logreg_training"}
+    command: "python modelling.py --data_path {data_path} --output_dir {output_dir} --experiment_name {experiment_name} --run_name {run_name}"
