@@ -11,7 +11,6 @@ permissions:
 jobs:
   retrain:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -28,8 +27,8 @@ jobs:
           MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
         run: |
           cd MLProject
-          mlflow run . --env-manager=local
-
+          mlflow run . --env-manager=local      
+      - name: Collect latest run artifacts (extras + model)
         env:
           MLFLOW_TRACKING_URI: file:${{ github.workspace }}/mlruns
         run: |
@@ -38,21 +37,22 @@ jobs:
           import mlflow
 
           mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+
           EXP_NAME = "workflow_ci_titanic"
           exp = mlflow.get_experiment_by_name(EXP_NAME)
           if exp is None:
               raise SystemExit(
                   f"Experiment '{EXP_NAME}' tidak ditemukan. "
-                  f"Pastikan modelling.py memakai args.experiment_name='{EXP_NAME}' (default) atau MLProject file sesuai.")
+                  f"Pastikan modelling.py memakai args.experiment_name='{EXP_NAME}' (default) atau MLProject file sesuai."
+              )
+
           runs = mlflow.search_runs([exp.experiment_id], order_by=["start_time DESC"], max_results=1)
           if runs.empty:
               raise SystemExit("Tidak ada run yang ditemukan pada experiment tersebut.")
           run_id = runs.iloc[0]["run_id"]
           print("LATEST_RUN_ID:", run_id)
-
           out_dir = os.path.join("ci_outputs", run_id)
           os.makedirs(out_dir, exist_ok=True)
-
           # 1) download extras artifacts
           try:
               extras_dir = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path="extras")
@@ -79,6 +79,7 @@ jobs:
           # save run_id
           with open(os.path.join(out_dir, "run_id.txt"), "w", encoding="utf-8") as f:
               f.write(run_id)
+
           print("Saved artifacts to:", out_dir)
           PY
       - name: Upload artifacts to GitHub Actions
@@ -93,7 +94,6 @@ jobs:
           git add ci_outputs/ || true
           git commit -m "CI: save latest training artifacts" || echo "No changes"
           git push || echo "No push"
-
   docker:
     needs: retrain
     runs-on: ubuntu-latest
@@ -111,13 +111,12 @@ jobs:
       - name: Login Docker Hub
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
-
       - name: Build Docker from downloaded MLflow model artifact
         run: |
           RUN_ID=$(ls -1 ci_outputs/*/run_id.txt 2>/dev/null | tail -n 1 | xargs cat)
           echo "RUN_ID=$RUN_ID"
           IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/workflow-ci-titanic:latest"
-
+         
           mlflow models build-docker -m "ci_outputs/${RUN_ID}/model" -n "$IMAGE"
 
       - name: Push Docker image
