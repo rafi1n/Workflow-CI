@@ -7,6 +7,17 @@ entry_points:
     parameters:
       data_path: {type: str, default: "titanic_preprocessing.csv"}
       output_dir: {type: str, default: "artifacts"}
+      target: {type: str, default: "Survived"}
       experiment_name: {type: str, default: "workflow_ci_titanic"}
       run_name: {type: str, default: "ci_logreg_training"}
-    command: "python modelling.py --data_path {data_path} --output_dir {output_dir} --experiment_name {experiment_name} --run_name {run_name}"
+      test_size: {type: float, default: 0.2}
+      random_state: {type: int, default: 42}
+    command: >
+      python modelling.py
+      --data_path {data_path}
+      --output_dir {output_dir}
+      --target {target}
+      --experiment_name {experiment_name}
+      --run_name {run_name}
+      --test_size {test_size}
+      --random_state {random_state}
